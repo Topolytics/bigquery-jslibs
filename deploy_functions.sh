@@ -1,13 +1,20 @@
 #!/bin/bash
 
+### START OF SETTINGS ###
+
+# projectid is your Project for the functionality
+# gsbucket is your Bucket to store the functionality
+# regions array of regions to deploy to which will use a REGION_ prefix on the functions names. 
+# The "default_" prefix is used to denote the default region which will omit the prefix.
+
 projectid="internal-tp0uk-server-1"
 gsbucket="topo-bigquery-jslibs"
+regions=( us eu default_europe-west2 )
+
+### END OF SETTINGS ###
 
 #Deploy JS libraries
 gsutil cp libs/*  gs://$gsbucket/
-
-#regions where to deploy. default_europe-west2 is there to denote the default wich is europe-west2 and not qualified
-regions=( default_eu_west2 )
 
 #create datsets if it does not exist Datasets in all regions
 ls sql | sort -z|while read libname; do
@@ -15,13 +22,14 @@ ls sql | sort -z|while read libname; do
   for reg in "${regions[@]}"
   do
     #we create the daset with no region for backwards compatibility
-    if [[ "$reg" == "default_eu_west2" ]];
+    IFS='_' read -a REG <<< "$reg"
+    if [[ "${REG[0]}" == "default" ]];
     then
-      region="europe-west2"
+      region="${REG[1]}"
       datasetname="$libname"
     else
-      region="$reg"
-      datasetname="${reg}_${libname}"
+      region="${REG[0]}"
+      datasetname="${region}_${libname}"
     fi
 
     #create the dataset
@@ -61,26 +69,34 @@ find "$(pwd)" -name "*.sql" | sort  -z |while read fname; do
   #we iterate over the regions to update or create all functions in the different regions
   for reg in "${regions[@]}"
   do
-    if [[ "$reg" == "default_eu_west2" ]];
+    IFS='_' read -a REG <<< "$reg"
+    if [[ "${REG[0]}" == "default" ]];
     then
       datasetname="${libname}"
+      function_prefix=""
     else
       datasetname="${reg}_${libname}"
+      function_prefix="${REG[0]}_"
     fi
     
-    #strings to match
-    search="jslibs.${libname}.${function_name}"
-    replace="\`${projectid}\`.${datasetname}.${function_name}"
+    # Strings to match - this takes care of all of the aspects of the sql files as-is. 
+    # NOTE: The sql files could be updated to be easier to manipluate 
 
-    search1="bigquery-jslibs"
-    replace1="${gsbucket}"
+    # Update the full function name
+    search1="jslibs.${libname}.${function_name}"
+    replace1="\`${projectid}\`.${datasetname}.${function_name}"
 
-    search2="jslibs\."
-    replace2="\`${projectid}\`."
+    # Update the bucket location of where to find the function code
+    search2="bigquery-jslibs"
+    replace2="${gsbucket}"
 
-    echo "CREATING OR UPDATING ${replace}"
+    # Update function call references to jslibs. to use `project`. instead
+    search3="jslibs\."
+    replace3="\`${projectid}\`.${function_prefix}"
 
-    sed "s/\`//g; s/${search}/${replace}/g; s/${search1}/${replace1}/g; s/${search2}/${replace2}/g" $fname > tmp.file
+    echo "CREATING OR UPDATING ${replace1}"
+
+    sed "s/${search1}/${replace1}/g; s/${search2}/${replace2}/g; s/${search3}/${replace3}/g" $fname > tmp.file
     bq  --project_id="${projectid}" query --use_legacy_sql=false --flagfile=tmp.file
     rm tmp.file
 
